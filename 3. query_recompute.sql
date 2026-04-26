@@ -1,21 +1,7 @@
 USE QuanLyHocTap1;
 GO
 
--- ============================================================
--- query_recompute_v4.sql
---
--- Dùng SAU KHI nạp dữ liệu seed (data nạp trước khi trigger
--- trg_TinhBangDiem được tạo) để tính lại BANGDIEM thủ công
--- theo công thức ĐÚNG (chuẩn hóa thang 10 theo DIEMTOIDA).
---
--- Sau lần này, các trigger v4 sẽ tự lo cho mọi INSERT/UPDATE
--- trên BAINOP và HIENDIEN.
---
--- KHÁC v3:
---   ✅ AVG(DIEM * 10.0 / DIEMTOIDA) thay vì AVG(DIEM)
---      → tránh tràn CHECK DIEM <= 10 của BANGDIEM khi BAITAP
---        có DIEMTOIDA khác 10.
--- ============================================================
+
 MERGE BANGDIEM AS bd
 USING (
     SELECT
@@ -52,11 +38,6 @@ WHEN NOT MATCHED THEN
     );
 GO
 
-
--- ============================================================
--- Tính lại CANHBAO cảnh báo điểm cho học viên đã có BANGDIEM
--- (dùng cho lần đầu, sau khi MERGE BANGDIEM ở trên)
--- ============================================================
 MERGE CANHBAO AS cb
 USING (
     SELECT
@@ -88,9 +69,6 @@ WHEN NOT MATCHED THEN
 GO
 
 
--- ============================================================
--- Tính lại CANHBAO cảnh báo chuyên cần dựa trên HIENDIEN hiện tại
--- ============================================================
 MERGE CANHBAO AS cb
 USING (
     SELECT

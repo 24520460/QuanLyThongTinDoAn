@@ -7,76 +7,17 @@ GO
 SET DATEFORMAT dmy;
 GO
 
--- ============================================================
--- THIẾT LẬP CƠ SỞ DỮ LIỆU QUẢN LÝ LỚP HỌC TRỰC TUYẾN — v4
---
--- 🆕 Thay đổi v4 (so với v3) — sửa các lỗi nghiệp vụ phát hiện
---    sau khi rà soát toàn bộ schema + trigger + query:
---
---   🔴 [FIX A] trg_TinhBangDiem: thêm AFTER INSERT (v3 chỉ
---      AFTER UPDATE → INSERT BAINOP có DIEM ngay từ đầu sẽ
---      KHÔNG được cộng vào BANGDIEM). Sửa cả điều kiện guard.
---
---   🔴 [FIX B] trg_CapNhatCanhBao: sửa logic guard sai
---      "IF NOT UPDATE(DIEM) AND NOT EXISTS(...)" — dùng AND
---      sai khiến guard không bao giờ active. Đổi thành chỉ
---      check UPDATE(DIEM) — đối với INSERT, UPDATE() trả TRUE
---      cho mọi cột nên vẫn chạy bình thường.
---
---   🔴 [FIX C] trg_CanhBaoVangHoc: dùng DISTINCT MATHAMGIA
---      trước khi JOIN HIENDIEN, tránh đếm trùng N lần khi batch
---      INSERT có nhiều dòng cùng MATHAMGIA.
---
---   🔴 [FIX D] Xung đột 2 trigger trên CANHBAO:
---      v3: trg_CapNhatCanhBao (theo điểm) và trg_CanhBaoVangHoc
---          (theo vắng) đều ghi vào CANHBAO có UNIQUE(MAND,MALH)
---          → ghi đè lẫn nhau, mất thông tin.
---      v4: TÁCH thành 2 dòng cảnh báo phân biệt bằng cột mới
---          NGUONCB ∈ {'Điểm', 'Chuyên cần'}. UNIQUE đổi thành
---          (MAND, MALH, NGUONCB). Giáo viên nhìn thấy đầy đủ
---          cảnh báo cả về điểm lẫn về chuyên cần.
---
---   🔴 [FIX E] trg_TinhBangDiem (và phần MERGE thủ công trong
---      query_fixed.sql): điểm bài tập có DIEMTOIDA khác nhau
---      (10, 20, 100…). AVG(DIEM) thẳng → tràn CHECK DIEM<=10
---      của BANGDIEM. v4 chuẩn hóa về thang 10 trước khi AVG:
---      AVG(bn.DIEM * 10.0 / bt.DIEMTOIDA).
---
---   🟡 [FIX F] BAITAP.NGAYTAO thêm NOT NULL — v3 chỉ có DEFAULT,
---      cho phép INSERT tường minh NULL → bypass CHECK HanNopBT.
---
---   🟡 [FIX G] LICHHOC.NGAYTRONGTUAN: đổi từ BETWEEN 2 AND 8
---      sang BETWEEN 1 AND 7 cho khớp với DATEPART(weekday) của
---      SQL Server. Quy ước v4: 1=CN, 2=T2, …, 7=T7 (DATEFIRST
---      mặc định = 7). Tham khảo cuối file để đổi nếu cần.
---
---   🟡 [FIX H] HIENDIEN.MALICH: thêm NOT NULL — điểm danh phải
---      gắn với 1 buổi học cụ thể (đúng spec 2.3.5.5).
---
---   🟢 [FIX I] Bỏ index trùng IX_CanhBao_MAND_MALH vì
---      UQ_CanhBao đã tự tạo unique index trên cùng cột.
---
--- Các phần khác giữ nguyên từ v3.
--- ============================================================
 
-
--- ============================================================
--- BẢNG DỮ LIỆU
--- ============================================================
-
--- 1. Vai trò
 CREATE TABLE VAITRO (
     MAVT  INT IDENTITY(1,1) PRIMARY KEY,
     TENVT NVARCHAR(100) NOT NULL
 );
 
--- 2. Khoa
 CREATE TABLE KHOA (
     MAKHOA  INT IDENTITY(1,1) PRIMARY KEY,
     TENKHOA NVARCHAR(100) NOT NULL
 );
 
--- 3. Người dùng
 CREATE TABLE NGUOIDUNG (
     MAND      INT IDENTITY(1,1) PRIMARY KEY,
     MAVT      INT NOT NULL,
@@ -91,7 +32,6 @@ CREATE TABLE NGUOIDUNG (
     CONSTRAINT FK_ND_KHOA   FOREIGN KEY (MAKHOA) REFERENCES KHOA(MAKHOA)
 );
 
--- 4. Môn học
 CREATE TABLE MONHOC (
     MAMH   INT IDENTITY(1,1) PRIMARY KEY,
     TENMH  NVARCHAR(100) NOT NULL,
@@ -99,7 +39,6 @@ CREATE TABLE MONHOC (
     CONSTRAINT FK_MH_KHOA FOREIGN KEY (MAKHOA) REFERENCES KHOA(MAKHOA)
 );
 
--- 5. Lớp học
 CREATE TABLE LOPHOC (
     MALH        INT IDENTITY(1,1) PRIMARY KEY,
     MAMH        INT NOT NULL,
@@ -115,7 +54,6 @@ CREATE TABLE LOPHOC (
     CONSTRAINT FK_LH_GIAOVIEN FOREIGN KEY (MAND) REFERENCES NGUOIDUNG(MAND)
 );
 
--- 6. Tham gia lớp
 CREATE TABLE THAMGIALOP (
     MATHAMGIA  INT IDENTITY(1,1) PRIMARY KEY,
     MALH       INT NOT NULL,
@@ -127,14 +65,7 @@ CREATE TABLE THAMGIALOP (
     CONSTRAINT FK_TG_HOCSINH FOREIGN KEY (MAND) REFERENCES NGUOIDUNG(MAND)
 );
 
--- ============================================================
--- 7. Lịch học
--- [FIX G] NGAYTRONGTUAN: BETWEEN 1 AND 7 (khớp DATEPART weekday
---          của SQL Server với DATEFIRST mặc định = 7 / Mỹ:
---          1 = Chủ Nhật, 2 = T2, …, 7 = T7).
---          Nếu muốn dùng quy ước Việt Nam (2=T2…8=CN) thì phải
---          SET DATEFIRST 1 ở đầu mọi session VÀ đổi CHECK.
--- ============================================================
+
 CREATE TABLE LICHHOC (
     MALICH        INT IDENTITY(1,1) PRIMARY KEY,
     MALH          INT NOT NULL,
@@ -149,10 +80,6 @@ CREATE TABLE LICHHOC (
     CONSTRAINT FK_LichHoc_Lop FOREIGN KEY (MALH) REFERENCES LOPHOC(MALH) ON DELETE CASCADE
 );
 
--- ============================================================
--- 8. Hiện diện (điểm danh)
--- [FIX H] MALICH NOT NULL — điểm danh phải gắn với 1 buổi học.
--- ============================================================
 CREATE TABLE HIENDIEN (
     MAHD         INT IDENTITY(1,1) PRIMARY KEY,
     MATHAMGIA    INT NOT NULL,
@@ -164,10 +91,6 @@ CREATE TABLE HIENDIEN (
     CONSTRAINT FK_HD_LICHHOC FOREIGN KEY (MALICH)    REFERENCES LICHHOC(MALICH)
 );
 
--- ============================================================
--- 9. Bài tập
--- [FIX F] NGAYTAO NOT NULL — chặn bypass CHECK HanNopBT.
--- ============================================================
 CREATE TABLE BAITAP (
     MABT      INT IDENTITY(1,1) PRIMARY KEY,
     MALH      INT NOT NULL,
@@ -182,7 +105,6 @@ CREATE TABLE BAITAP (
     CONSTRAINT FK_BT_GIAOVIEN  FOREIGN KEY (MAND) REFERENCES NGUOIDUNG(MAND)
 );
 
--- 10. Bài nộp
 CREATE TABLE BAINOP (
     MANOP     INT IDENTITY(1,1) PRIMARY KEY,
     MABT      INT NOT NULL,
@@ -195,11 +117,7 @@ CREATE TABLE BAINOP (
     CONSTRAINT FK_BN_BAITAP  FOREIGN KEY (MABT)      REFERENCES BAITAP(MABT),
     CONSTRAINT FK_BN_THAMGIA FOREIGN KEY (MATHAMGIA) REFERENCES THAMGIALOP(MATHAMGIA)
 );
--- Lưu ý v4: ràng buộc 0 <= DIEM <= DIEMTOIDA được kiểm tra
--- bằng trigger trg_KiemTraDiemBaiNop (xem phía dưới) thay vì
--- CHECK constraint vì DIEMTOIDA nằm ở bảng khác.
 
--- 11. Thông báo
 CREATE TABLE THONGBAO (
     MATB    INT IDENTITY(1,1) PRIMARY KEY,
     MALH    INT NOT NULL,
@@ -211,7 +129,6 @@ CREATE TABLE THONGBAO (
     CONSTRAINT FK_TB_NGUOIDUNG FOREIGN KEY (MAND) REFERENCES NGUOIDUNG(MAND)
 );
 
--- 12. Tin nhắn
 CREATE TABLE TINNHAN (
     MATN        INT IDENTITY(1,1) PRIMARY KEY,
     MANGUOIGUI  INT NOT NULL,
@@ -224,7 +141,6 @@ CREATE TABLE TINNHAN (
     CONSTRAINT FK_TN_NGUOINHAN   FOREIGN KEY (MANGUOINHAN) REFERENCES NGUOIDUNG(MAND)
 );
 
--- 13. Bảng điểm (điểm tổng kết, đã chuẩn hóa thang 10)
 CREATE TABLE BANGDIEM (
     MABD        INT IDENTITY(1,1) PRIMARY KEY,
     MATHAMGIA   INT NOT NULL UNIQUE,
@@ -234,7 +150,6 @@ CREATE TABLE BANGDIEM (
     CONSTRAINT FK_BD_THAMGIA FOREIGN KEY (MATHAMGIA) REFERENCES THAMGIALOP(MATHAMGIA)
 );
 
--- 14. Tài liệu
 CREATE TABLE TAILIEU (
     MATL    INT IDENTITY(1,1) PRIMARY KEY,
     TENTL   NVARCHAR(255) NOT NULL,
@@ -247,7 +162,6 @@ CREATE TABLE TAILIEU (
     CONSTRAINT FK_TL_LOPHOC    FOREIGN KEY (MALH) REFERENCES LOPHOC(MALH) ON DELETE CASCADE
 );
 
--- 15. Đánh giá
 CREATE TABLE DANHGIA (
     MADG      INT IDENTITY(1,1) PRIMARY KEY,
     MATHAMGIA INT NOT NULL,
@@ -258,18 +172,12 @@ CREATE TABLE DANHGIA (
     CONSTRAINT FK_DG_THAMGIA FOREIGN KEY (MATHAMGIA) REFERENCES THAMGIALOP(MATHAMGIA)
 );
 
--- ============================================================
--- 16. Cảnh báo
--- [FIX D] Thêm cột NGUONCB để phân biệt cảnh báo điểm và
---          cảnh báo chuyên cần. UNIQUE đổi thành 3 cột →
---          mỗi học sinh trong mỗi lớp có thể có TỐI ĐA 2 dòng:
---          1 dòng cho điểm, 1 dòng cho chuyên cần.
--- ============================================================
+
 CREATE TABLE CANHBAO (
     MACB    INT IDENTITY(1,1) PRIMARY KEY,
     MAND    INT NOT NULL,
     MALH    INT NOT NULL,
-    NGUONCB NVARCHAR(20) NOT NULL                       -- v4 mới
+    NGUONCB NVARCHAR(20) NOT NULL                       
             CHECK (NGUONCB IN (N'Điểm', N'Chuyên cần')),
     LOAICB  NVARCHAR(50) CHECK (LOAICB IN (N'Đạt', N'Nguy cơ', N'Nguy cơ cao')),
     NOIDUNG NVARCHAR(MAX),
@@ -282,21 +190,13 @@ CREATE TABLE CANHBAO (
 GO
 
 
--- ============================================================
--- INDEX HỖ TRỢ TRUY VẤN
--- [FIX I] Bỏ IX_CanhBao_MAND_MALH vì trùng với UQ_CanhBao.
--- ============================================================
+
 CREATE INDEX IX_ThamGiaLop_MAND  ON THAMGIALOP (MAND);
 CREATE INDEX IX_ThamGiaLop_MALH  ON THAMGIALOP (MALH);
 CREATE INDEX IX_BaiNop_MATHAMGIA ON BAINOP     (MATHAMGIA);
 CREATE INDEX IX_HienDien_MALICH  ON HIENDIEN   (MALICH);
 GO
 
-
--- ============================================================
--- TRIGGER: XÓA THAMGIALOP (INSTEAD OF DELETE)
--- Thứ tự: HIENDIEN → BAINOP → BANGDIEM → DANHGIA → THAMGIALOP
--- ============================================================
 CREATE TRIGGER trg_XoaThamGia
 ON THAMGIALOP
 INSTEAD OF DELETE
@@ -311,7 +211,6 @@ BEGIN
 END;
 GO
 
--- TRIGGER: XÓA LOPHOC → kích hoạt cascade sang THAMGIALOP
 CREATE TRIGGER trg_XoaLopHoc
 ON LOPHOC
 AFTER DELETE
@@ -323,9 +222,6 @@ END;
 GO
 
 
--- ============================================================
--- TRIGGER 1a–1d: Kiểm tra vai trò
--- ============================================================
 CREATE TRIGGER trg_KiemTraVaiTroLopHoc
 ON LOPHOC AFTER INSERT, UPDATE
 AS BEGIN
@@ -391,9 +287,6 @@ END;
 GO
 
 
--- ============================================================
--- TRIGGER 2: Kiểm tra sĩ số tối đa
--- ============================================================
 CREATE TRIGGER trg_KiemTraSiSo
 ON THAMGIALOP AFTER INSERT
 AS BEGIN
@@ -411,13 +304,6 @@ AS BEGIN
 END;
 GO
 
-
--- ============================================================
--- TRIGGER MỚI v4: Kiểm tra điểm bài nộp ≤ DIEMTOIDA của bài tập
---
--- Vì DIEMTOIDA nằm ở bảng BAITAP nên không thể dùng CHECK
--- constraint trực tiếp trên BAINOP.DIEM. Trigger thay thế.
--- ============================================================
 CREATE TRIGGER trg_KiemTraDiemBaiNop
 ON BAINOP AFTER INSERT, UPDATE
 AS BEGIN
@@ -438,29 +324,15 @@ END;
 GO
 
 
--- ============================================================
--- TRIGGER 3: Tự động tính BANGDIEM (FIX A + FIX E)
---
--- v3 → v4:
---   ✅ Thêm AFTER INSERT (v3 chỉ AFTER UPDATE → bỏ sót khi
---      INSERT BAINOP có DIEM ngay).
---   ✅ Chuẩn hóa DIEM về thang 10 trước khi AVG:
---          AVG(DIEM * 10.0 / DIEMTOIDA)
---      Nếu không scale, tổng kết có thể vượt 10 → tràn CHECK
---      của BANGDIEM.DIEM.
--- ============================================================
 CREATE TRIGGER trg_TinhBangDiem
 ON BAINOP
-AFTER INSERT, UPDATE   -- v4: thêm INSERT
+AFTER INSERT, UPDATE  
 AS
 BEGIN
     SET NOCOUNT ON;
 
-    -- Đối với INSERT: UPDATE() trả TRUE cho mọi cột → guard
-    -- này chỉ chặn khi UPDATE thuần túy không động vào DIEM.
     IF NOT UPDATE(DIEM) RETURN;
 
-    -- Có thay đổi DIEM nhưng tất cả đều NULL → không có gì để tính
     IF NOT EXISTS (SELECT 1 FROM inserted WHERE DIEM IS NOT NULL) RETURN;
 
     ;WITH AffectedTG AS (
@@ -469,7 +341,6 @@ BEGIN
     DiemTongKet AS (
         SELECT
             a.MATHAMGIA,
-            -- v4 FIX E: scale về thang 10
             AVG(bn.DIEM * 10.0 / NULLIF(bt.DIEMTOIDA, 0)) AS DIEM_TONGKET
         FROM AffectedTG a
         JOIN BAINOP bn ON bn.MATHAMGIA = a.MATHAMGIA
@@ -507,15 +378,6 @@ END;
 GO
 
 
--- ============================================================
--- TRIGGER 4: Cảnh báo theo điểm tổng kết (FIX B + FIX D)
---
--- v3 → v4:
---   ✅ Sửa guard "IF NOT UPDATE(DIEM) AND NOT EXISTS(...)"
---      → đổi sang chỉ "IF NOT UPDATE(DIEM) RETURN"
---      (đối với INSERT thì UPDATE() = TRUE → không bị chặn).
---   ✅ Ghi NGUONCB = N'Điểm' để phân biệt với cảnh báo vắng.
--- ============================================================
 CREATE TRIGGER trg_CapNhatCanhBao
 ON BANGDIEM
 AFTER INSERT, UPDATE
@@ -523,7 +385,6 @@ AS
 BEGIN
     SET NOCOUNT ON;
 
-    -- v4 FIX B: chỉ check UPDATE(DIEM); INSERT vẫn pass
     IF NOT UPDATE(DIEM) RETURN;
 
     ;WITH CanhBaoMoi AS (
@@ -551,7 +412,7 @@ BEGIN
     USING CanhBaoMoi AS cbm
         ON cb.MAND = cbm.MAND
        AND cb.MALH = cbm.MALH
-       AND cb.NGUONCB = N'Điểm'        -- v4: phân biệt nguồn
+       AND cb.NGUONCB = N'Điểm'      
     WHEN MATCHED THEN
         UPDATE SET
             cb.LOAICB  = cbm.LOAI,
@@ -565,15 +426,6 @@ END;
 GO
 
 
--- ============================================================
--- TRIGGER 4b: Cảnh báo theo tỷ lệ vắng (FIX C + FIX D)
---
--- v3 → v4:
---   ✅ DISTINCT MATHAMGIA trước khi JOIN HIENDIEN, tránh đếm
---      trùng khi batch INSERT có nhiều dòng cùng MATHAMGIA.
---   ✅ Ghi NGUONCB = N'Chuyên cần' → không xung đột với
---      cảnh báo điểm; cả 2 dòng cùng tồn tại trong CANHBAO.
--- ============================================================
 CREATE TRIGGER trg_CanhBaoVangHoc
 ON HIENDIEN
 AFTER INSERT, UPDATE
@@ -582,7 +434,7 @@ BEGIN
     SET NOCOUNT ON;
 
     ;WITH AffectedTG AS (
-        SELECT DISTINCT MATHAMGIA FROM inserted   -- v4 FIX C
+        SELECT DISTINCT MATHAMGIA FROM inserted   
     ),
     TyLeVang AS (
         SELECT
@@ -615,7 +467,7 @@ BEGIN
     USING CanhBaoVang AS cbv
         ON cb.MAND = cbv.MAND
        AND cb.MALH = cbv.MALH
-       AND cb.NGUONCB = N'Chuyên cần'        -- v4: phân biệt nguồn
+       AND cb.NGUONCB = N'Chuyên cần'       
     WHEN MATCHED THEN
         UPDATE SET
             cb.LOAICB  = cbv.LOAI_VANG,
@@ -629,9 +481,6 @@ END;
 GO
 
 
--- ============================================================
--- TRIGGER 5: Kiểm tra logic thời gian lịch học
--- ============================================================
 CREATE TRIGGER trg_KiemTraThoiGianLichHoc
 ON LICHHOC AFTER INSERT, UPDATE
 AS BEGIN
@@ -643,7 +492,3 @@ AS BEGIN
 END;
 GO
 
-
--- ============================================================
--- KẾT THÚC SCRIPT v4
--- ============================================================
