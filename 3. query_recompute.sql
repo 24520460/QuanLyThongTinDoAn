@@ -1,4 +1,4 @@
-USE QuanLyHocTap1;
+USE QuanLyHocTap;
 GO
 
 

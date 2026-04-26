@@ -1,7 +1,7 @@
-CREATE DATABASE QuanLyHocTap1;
+CREATE DATABASE QuanLyHocTap;
 GO
 
-USE QuanLyHocTap1;
+USE QuanLyHocTap;
 GO
 
 SET DATEFORMAT dmy;

@@ -1,4 +1,4 @@
-﻿USE QuanLyHocTap2;
+﻿USE QuanLyHocTap;
 GO
 
 SET NOCOUNT ON;
