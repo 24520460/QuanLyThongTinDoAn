@@ -110,7 +110,7 @@ CREATE TABLE BAINOP (
     MABT      INT NOT NULL,
     MATHAMGIA INT NOT NULL,
     NGAYNOP   DATETIME DEFAULT GETDATE(),
-    DIEM      FLOAT,    -- KHÔNG CHECK [0,10] nữa: điểm raw theo DIEMTOIDA của bài tập
+    DIEM      FLOAT CHECK (DIEM IS NULL OR (DIEM >= 0 AND DIEM <= 10)),
     DUONGDAN  NVARCHAR(255),
     NHANXET   NVARCHAR(MAX),
     CONSTRAINT UQ_BaiNop     UNIQUE (MABT, MATHAMGIA),
@@ -304,24 +304,6 @@ AS BEGIN
 END;
 GO
 
-CREATE TRIGGER trg_KiemTraDiemBaiNop
-ON BAINOP AFTER INSERT, UPDATE
-AS BEGIN
-    SET NOCOUNT ON;
-    IF NOT UPDATE(DIEM) RETURN;
-
-    IF EXISTS (
-        SELECT 1
-        FROM inserted i
-        JOIN BAITAP bt ON bt.MABT = i.MABT
-        WHERE i.DIEM IS NOT NULL
-          AND (i.DIEM < 0 OR i.DIEM > bt.DIEMTOIDA)
-    ) BEGIN
-        RAISERROR (N'Điểm bài nộp phải nằm trong khoảng [0, DIEMTOIDA của bài tập].', 16, 1);
-        ROLLBACK TRANSACTION;
-    END
-END;
-GO
 
 
 CREATE TRIGGER trg_TinhBangDiem
@@ -335,18 +317,8 @@ BEGIN
 
     IF NOT EXISTS (SELECT 1 FROM inserted WHERE DIEM IS NOT NULL) RETURN;
 
-    ;WITH AffectedTG AS (
-        SELECT DISTINCT MATHAMGIA FROM inserted
-    ),
-    DiemTongKet AS (
-        SELECT
-            a.MATHAMGIA,
-            AVG(bn.DIEM * 10.0 / NULLIF(bt.DIEMTOIDA, 0)) AS DIEM_TONGKET
-        FROM AffectedTG a
-        JOIN BAINOP bn ON bn.MATHAMGIA = a.MATHAMGIA
-        JOIN BAITAP bt ON bt.MABT      = bn.MABT
-        WHERE bn.DIEM IS NOT NULL
-        GROUP BY a.MATHAMGIA
+    ;WITH DiemTongKet AS (
+        SELECT CAST(NULL AS INT) AS MATHAMGIA, CAST(NULL AS FLOAT) AS DIEM_TONGKET WHERE 1=0
     )
     MERGE BANGDIEM AS bd
     USING DiemTongKet AS dtk
